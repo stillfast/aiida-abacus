@@ -1,0 +1,61 @@
+diff --git a/source/module_elecstate/elecstate_lcao.cpp b/source/module_elecstate/elecstate_lcao.cpp
+index 9b2c945fd..fb004d6e2 100644
+--- a/source/module_elecstate/elecstate_lcao.cpp
++++ b/source/module_elecstate/elecstate_lcao.cpp
+@@ -166,7 +166,7 @@ void ElecStateLCAO<double>::dmToRho(std::vector<double*> pexsi_DM, std::vector<d
+         {
+             ModuleBase::GlobalFunc::ZEROS(this->charge->kin_r[0], this->charge->nrxx);
+         }
+-        Gint_inout inout1(this->charge->kin_r, Gint_Tools::job_type::tau);
++        Gint_inout inout1(this->charge->kin_r[0], Gint_Tools::job_type::tau);
+         this->gint_gamma->cal_gint(&inout1);
+     }
+ 
+diff --git a/source/module_hamilt_lcao/hamilt_lcaodft/edm.cpp b/source/module_hamilt_lcao/hamilt_lcaodft/edm.cpp
+index 49074830a..9e0bea4cf 100644
+--- a/source/module_hamilt_lcao/hamilt_lcaodft/edm.cpp
++++ b/source/module_hamilt_lcao/hamilt_lcaodft/edm.cpp
+@@ -1,5 +1,8 @@
+ #include "FORCE.h"
+ #include "module_elecstate/module_dm/cal_dm_psi.h"
++#ifdef __PEXSI
++#include "module_elecstate/elecstate_lcao.h"
++#endif
+ #include "module_base/memory.h"
+ #include "module_parameter/parameter.h"
+ template<>
+diff --git a/source/module_hsolver/hsolver_lcao.cpp b/source/module_hsolver/hsolver_lcao.cpp
+index 2f9a1b431..7d040df29 100644
+--- a/source/module_hsolver/hsolver_lcao.cpp
++++ b/source/module_hsolver/hsolver_lcao.cpp
+@@ -26,6 +26,7 @@
+ 
+ #include "module_base/global_variable.h"
+ #include "module_base/memory.h"
++#include "module_base/parallel_common.h"
+ #include "module_base/timer.h"
+ #include "module_elecstate/elecstate_lcao.h"
+ #include "module_elecstate/module_dm/cal_dm_psi.h"
+@@ -107,8 +108,21 @@ void HSolverLCAO<T, Device>::solve(hamilt::Hamilt<T>* pHamilt,
+             // solve eigenvector and eigenvalue for H(k)
+             pe.diag(pHamilt, psi, nullptr);
+         }
++        // PEXSI fills these three scalars only on the ranks that drive the pole expansion; every
++        // other rank would keep eband = 0 and therefore report a different total energy (with
++        // `out_alllog 1`: rank0 E_band = 79.2661 eV, ranks1-3 E_band = 0). Publish them first.
++#ifdef __MPI
++        Parallel_Common::bcast_double(pe.totalEnergyH);
++        Parallel_Common::bcast_double(pe.totalEnergyS);
++        Parallel_Common::bcast_double(pe.totalFreeEnergy);
++#endif
+         auto _pes = dynamic_cast<elecstate::ElecStateLCAO<T>*>(pes);
+-        pes->f_en.eband = pe.totalFreeEnergy;
++        // totalEnergyH = Tr[H*DM] is the band energy (what sum_i f_i eps_i means for the exact DM),
++        // while totalFreeEnergy = Tr[H*DM] - T*S additionally carries the electronic entropy, which
++        // ABACUS keeps in its own term f_en.demet. Assigning the free energy to eband counted the
++        // entropy into the band term and left demet = 0.
++        pes->f_en.eband = pe.totalEnergyH;
++        pes->f_en.demet = pe.totalFreeEnergy - pe.totalEnergyH;
+         // maybe eferm could be dealt with in the future
+         _pes->dmToRho(pe.DM, pe.EDM);
+ #endif
